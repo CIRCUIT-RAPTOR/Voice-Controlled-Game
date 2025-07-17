@@ -1,221 +1,251 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>Voice Dino Game</title>
+  <title>Voice-Controlled Highway Game</title>
   <style>
-    body { margin: 0; overflow: hidden; background: #f4f4f4; font-family: sans-serif; }
-    canvas { display: block; margin: auto; background: #fff; border: 2px solid #222; }
-    #restartBtn, #modeToggle {
+    body { margin: 0; background: #111; font-family: sans-serif; }
+    canvas { display: block; margin: auto; background: black; border: 2px solid #444; }
+    #ui {
       position: absolute;
       top: 10px;
-      font-size: 16px;
-      padding: 8px 16px;
+      left: 10px;
+      color: #fff;
       z-index: 10;
     }
-    #restartBtn {
-      left: 50%;
-      transform: translateX(-50%);
-      display: none;
-    }
-    #modeToggle {
-      right: 10px;
+    #ui button, #ui select {
+      margin-top: 5px;
+      font-size: 16px;
     }
   </style>
 </head>
 <body>
-  <canvas id="game" width="480" height="240"></canvas>
-  <button id="restartBtn">Restart Game</button>
-  <button id="modeToggle">Mode: Loudness</button>
+<div id="ui">
+  <div>🎯 Score: <span id="score">0</span></div>
+  <div>🏆 Top Score: <span id="topScore">0</span></div>
+  <button onclick="restartGame()">🔁 Restart</button><br>
+  <label for="mode">Control Mode:</label>
+  <select id="mode" onchange="switchMode()">
+    <option value="loudness">Loudness</option>
+    <option value="pitch">Pitch</option>
+  </select>
+</div>
 
-  <script>
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
-    const restartBtn = document.getElementById("restartBtn");
-    const modeToggle = document.getElementById("modeToggle");
+<canvas id="game" width="480" height="640"></canvas>
 
-    let speed = 2, gameStartTime = 0, frame = 0, nextSpawn = 0;
-    let gameRunning = true, animationId = null;
-    let controlMode = "loudness"; // "pitch" or "loudness"
-    const obstacles = [];
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
 
-    const dino = {
-      x: 50, y: 160, w: 30, h: 40,
-      vy: 0, gravity: 0.8, jumpForce: -12,
-      crouch: false, jumping: false,
-      update() {
-        this.vy += this.gravity;
-        this.y += this.vy;
-        if (this.y > 160) {
-          this.y = 160;
-          this.vy = 0;
-          this.jumping = false;
-        }
-        this.h = this.crouch ? 20 : 40;
-      },
-      jump() {
-        if (!this.jumping) {
-          this.vy = this.jumpForce;
-          this.jumping = true;
-        }
-      }
+const scoreEl = document.getElementById("score");
+const topScoreEl = document.getElementById("topScore");
+
+const LANE_COUNT = 4;
+const LANE_WIDTH = canvas.width / LANE_COUNT;
+
+let controlMode = "loudness";
+let micReady = false;
+
+let gameRunning, score, topScore, speed, frame, bgY, enemies, police, car, enemyInterval;
+
+const images = {
+  car: "car.png",
+  police: "police.png",
+  enemy1: "enemy1.png",
+  enemy2: "enemy2.png",
+  road: "road.png"
+};
+const loaded = {};
+
+function loadImages(callback) {
+  let remaining = Object.keys(images).length;
+  for (let key in images) {
+    const img = new Image();
+    img.src = images[key];
+    img.onload = () => {
+      loaded[key] = img;
+      if (--remaining === 0) callback();
     };
+  }
+}
 
-    function spawnObstacle() {
-      const type = Math.random() < 0.5 ? "ground" : "flying";
-      const h = 20 + (type === "ground" ? Math.random() * 30 : 0);
-      const y = type === "ground" ? 200 - h : 120 + Math.random() * 40;
-      obstacles.push({ x: canvas.width, y, w: 20, h, type });
+function laneX(lane) {
+  return lane * LANE_WIDTH + (LANE_WIDTH - 50) / 2;
+}
+
+function initGameVars() {
+  car = {
+    lane: 1,
+    targetLane: 1,
+    x: laneX(1),
+    y: 500,
+    w: 50,
+    h: 90
+  };
+  police = { y: 600, w: 50, h: 90 };
+  enemies = [];
+  speed = 3;
+  frame = 0;
+  bgY = 0;
+  gameRunning = true;
+  score = 0;
+  scoreEl.textContent = 0;
+  topScore = localStorage.getItem("topScore") || 0;
+  topScoreEl.textContent = topScore;
+}
+
+function spawnEnemy() {
+  const lane = Math.floor(Math.random() * LANE_COUNT);
+  const img = Math.random() < 0.5 ? loaded.enemy1 : loaded.enemy2;
+  enemies.push({ lane, y: -100, w: 50, h: 90, img });
+}
+
+function updateGame() {
+  if (!gameRunning) return;
+
+  car.x += (laneX(car.targetLane) - car.x) * 0.2;
+
+  bgY += speed;
+  if (bgY > canvas.height) bgY = 0;
+
+  for (let e of enemies) e.y += speed;
+  enemies = enemies.filter(e => e.y < canvas.height + 100);
+
+  police.y = car.y + 100;
+
+  if (frame % 300 === 0) speed += 0.3;
+
+  if (frame % 10 === 0) {
+    score++;
+    scoreEl.textContent = score;
+    if (score > topScore) {
+      topScore = score;
+      localStorage.setItem("topScore", score);
+      topScoreEl.textContent = score;
     }
+  }
 
-    function updateObstacles() {
-      for (let obs of obstacles) obs.x -= speed;
-      if (frame >= nextSpawn) {
-        spawnObstacle();
-        nextSpawn = frame + 90 + Math.floor(Math.random() * 60);
-      }
+  for (let e of enemies) {
+    if (
+      e.lane === car.targetLane &&
+      car.y < e.y + e.h &&
+      car.y + car.h > e.y
+    ) {
+      endGame("💥 Crashed into obstacle!");
     }
+  }
 
-    function drawGameOver() {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#fff";
-      ctx.font = "24px Arial";
-      ctx.fillText("Game Over!", 160, 100);
-      ctx.font = "16px Arial";
-      ctx.fillText("Tap 'Restart' or make noise to try again!", 90, 140);
-    }
+  drawGame();
+  frame++;
+  requestAnimationFrame(updateGame);
+}
 
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#2ecc71";
-      ctx.fillRect(dino.x, dino.y + (40 - dino.h), dino.w, dino.h);
-      ctx.fillStyle = "#e74c3c";
-      for (let obs of obstacles) {
-        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-      }
-      ctx.fillStyle = "#555";
-      ctx.fillRect(0, 200, canvas.width, 5);
-      if (!gameRunning) drawGameOver();
-    }
+function drawGame() {
+  ctx.drawImage(loaded.road, 0, bgY - canvas.height, canvas.width, canvas.height);
+  ctx.drawImage(loaded.road, 0, bgY, canvas.width, canvas.height);
+  for (let e of enemies) {
+    ctx.drawImage(e.img, laneX(e.lane), e.y, e.w, e.h);
+  }
+  ctx.drawImage(loaded.police, laneX(car.targetLane), police.y, car.w, car.h);
+  ctx.drawImage(loaded.car, car.x, car.y, car.w, car.h);
+}
 
-    function checkCollision() {
-      for (let obs of obstacles) {
-        if (
-          dino.x < obs.x + obs.w &&
-          dino.x + dino.w > obs.x &&
-          dino.y + (40 - dino.h) < obs.y + obs.h &&
-          dino.y + (40 - dino.h) + dino.h > obs.y
-        ) {
-          gameRunning = false;
-          restartBtn.style.display = "block";
-        }
-      }
-    }
+function endGame(msg) {
+  gameRunning = false;
+  clearInterval(enemyInterval);
+  alert(msg);
+}
 
-    function resetGame() {
-      if (animationId) cancelAnimationFrame(animationId);
-      gameRunning = true;
-      speed = 2;
-      gameStartTime = performance.now();
-      frame = 0;
-      nextSpawn = 0;
-      obstacles.length = 0;
-      Object.assign(dino, { y: 160, vy: 0, jumping: false, crouch: false });
-      restartBtn.style.display = "none";
-      gameLoop();
-    }
+function restartGame() {
+  clearInterval(enemyInterval);
+  initGameVars();
+  enemyInterval = setInterval(spawnEnemy, 1200);
+  updateGame();
+}
 
-    function gameLoop() {
-      if (gameRunning) {
-        dino.update();
-        updateObstacles();
-        checkCollision();
-        const elapsed = (performance.now() - gameStartTime) / 1000;
-        speed = 2 + elapsed * 0.05;
-      }
-      draw();
-      frame++;
-      animationId = requestAnimationFrame(gameLoop);
-    }
+function switchMode() {
+  controlMode = document.getElementById("mode").value;
+}
 
-    restartBtn.onclick = resetGame;
+function moveLeft() {
+  if (car.targetLane > 0) {
+    car.lane--;
+    car.targetLane--;
+  } else {
+    endGame("💥 Tried to go off-road left!");
+  }
+}
 
-    // 🎤 Mic logic
-    async function initMicControl() {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      source.connect(analyser);
-      const data = new Float32Array(analyser.fftSize);
+function moveRight() {
+  if (car.targetLane < LANE_COUNT - 1) {
+    car.lane++;
+    car.targetLane++;
+  } else {
+    endGame("💥 Tried to go off-road right!");
+  }
+}
 
-      function getPitch() {
-        analyser.getFloatTimeDomainData(data);
-        let bestOffset = -1, bestCorr = 0, rms = 0;
+async function initMic() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(stream);
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  const data = new Float32Array(analyser.fftSize);
+  source.connect(analyser);
+
+  let lastMove = 0;
+
+  function micLoop() {
+    if (!micReady) return setTimeout(micLoop, 100);
+
+    analyser.getFloatTimeDomainData(data);
+    let now = Date.now();
+
+    if (now - lastMove > 300 && gameRunning) {
+      if (controlMode === "loudness") {
+        let rms = 0;
         for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
         rms = Math.sqrt(rms / data.length);
-        if (rms < 0.01) return -1;
-        for (let offset = 32; offset < 512; offset++) {
-          let corr = 0;
-          for (let i = 0; i < 512; i++) {
-            corr += data[i] * data[i + offset];
-          }
-          corr /= 512;
-          if (corr > bestCorr) {
-            bestCorr = corr;
-            bestOffset = offset;
-          }
+        if (rms > 0.12) {
+          moveRight();
+          lastMove = now;
+        } else if (rms > 0.05) {
+          moveLeft();
+          lastMove = now;
         }
-        if (bestCorr > 0.01) {
-          return audioCtx.sampleRate / bestOffset;
-        }
-        return -1;
-      }
-
-      function micLoop() {
-        if (!gameRunning) return setTimeout(micLoop, 50);
-
-        analyser.getFloatTimeDomainData(data);
-        let rms = 0;
+      } else {
+        let max = -Infinity, index = 0;
         for (let i = 0; i < data.length; i++) {
-          rms += data[i] * data[i];
-        }
-        rms = Math.sqrt(rms / data.length);
-
-        if (controlMode === "loudness") {
-          if (rms > 0.08) {
-            dino.jump();
-          } else if (rms > 0.02) {
-            dino.crouch = true;
-          } else {
-            dino.crouch = false;
-          }
-        } else if (controlMode === "pitch") {
-          const pitch = getPitch();
-          if (pitch > 300) {
-            dino.jump();
-          } else if (pitch > 50 && pitch < 150) {
-            dino.crouch = true;
-          } else {
-            dino.crouch = false;
+          if (data[i] > max) {
+            max = data[i];
+            index = i;
           }
         }
-
-        setTimeout(micLoop, 50);
+        let pitch = index * audioCtx.sampleRate / analyser.fftSize;
+        if (pitch > 400) {
+          moveRight();
+          lastMove = now;
+        } else if (pitch > 150) {
+          moveLeft();
+          lastMove = now;
+        }
       }
-
-      micLoop();
     }
 
-    modeToggle.onclick = () => {
-      controlMode = controlMode === "loudness" ? "pitch" : "loudness";
-      modeToggle.textContent = `Mode: ${controlMode.charAt(0).toUpperCase() + controlMode.slice(1)}`;
-    };
+    setTimeout(micLoop, 50);
+  }
 
-    initMicControl();
-    resetGame();
-  </script>
+  micReady = true;
+  micLoop();
+}
+
+// Start game after images load
+loadImages(() => {
+  initGameVars();
+  enemyInterval = setInterval(spawnEnemy, 1200);
+  updateGame();
+  initMic();
+});
+</script>
 </body>
 </html>
