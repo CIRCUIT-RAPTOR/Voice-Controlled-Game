@@ -239,7 +239,6 @@ async function initMic() {
   micLoop();
 }
 
-// Start game after images load
 loadImages(() => {
   initGameVars();
   enemyInterval = setInterval(spawnEnemy, 1200);
